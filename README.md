@@ -1,2 +1,2 @@
 # rsd
-redshift space compressions
+compressing redshift space distortions
