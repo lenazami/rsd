@@ -1,9 +1,16 @@
-abacus/
-mocks/
-output/
+abacus
 subsamples/
-Untitled.ipynb
-prepare_sim.yaml
+results/
+config/
+plots/
+notebooks/
+
+data/lrg_params.csv
+.agents/
+.codex/
+CLAUDE.md
+AGENTS.md
+
 
 # from github init
 # Byte-compiled / optimized / DLL files

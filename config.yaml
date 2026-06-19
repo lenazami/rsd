@@ -1,0 +1,35 @@
+# config.yaml
+# -------------------
+# Edit params here!
+sim:
+  name: AbacusSummit_highbase_c000_ph100
+  type: fiducial   # label used in output filenames
+
+  # redshift of the sim snapshot to use
+  z: 0.5
+
+tracer: LRG
+hod_model: base    # which row in data/lrg_params.csv to use as baseline HOD
+
+n_mocks: 20
+seed_base: 101     # mocks use seeds seed_base, seed_base+1, ..., seed_base+n_mocks-1
+
+# HOD parameter variations — each key must match a field in HODParams (src/utils.py)
+hod_variations:
+  alpha_c: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+  s_v:     [-1.0, -0.8, -0.6, -0.4, -0.2, 0.2, 0.4, 0.6, 0.8, 1.0]
+
+clustering:
+  corr_type: smu         # smu (multipoles) or rppi (projected)
+  regime: small_scales
+  rsd: true
+  ells: [0, 2, 4]        # multipole orders (for smu)
+  n_seeds: 5             # how many of the n_mocks seeds to use when computing xi
+  pimax: null            # max pi for rppi integration; null = not used
+
+  # Alcock-Paczynski dilation factors; set both to 1.0 for no AP correction
+  ap:
+    fpar:  1.0
+    fperp: 1.0
+
+n_threads: 32
