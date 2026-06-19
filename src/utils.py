@@ -130,11 +130,44 @@ def split_censat(table):
     Ncent, Nsat = _mock_info(table, 'Ncent', 'Nsat')
 
     print('splitting the mock into {} centrals and {} satellites'.format(Ncent,Nsat))
-    
+
     cents = table[:Ncent]
     sats = table[Ncent:]
 
     return cents, sats
+
+
+## run_hod exposes the host halo id and mass per galaxy, but NOT the halo center.
+## these two helpers read the halo-center pos/vel from the (cleaned) CompaSO catalog
+## and join them onto a mock by host halo id. load_halo_centers reads ONLY the four
+## needed fields and is called once per sim; match_halo_centers does the per-mock join.
+def load_halo_centers(sim_dir, sim_name, z, cleaned=True):
+    from abacusnbody.data.compaso_halo_catalog import CompaSOHaloCatalog
+    halo_dir = Path(sim_dir) / sim_name / 'halos' / f'z{z:.3f}'
+    cat = CompaSOHaloCatalog(str(halo_dir), cleaned=cleaned,
+                             fields=['id', 'x_L2com', 'v_L2com', 'N'])
+    hid   = np.asarray(cat.halos['id'])
+    order = np.argsort(hid)   ## sort by id so match_halo_centers can use searchsorted
+    return {
+        'id':      hid[order],
+        'x_L2com': np.asarray(cat.halos['x_L2com'])[order],
+        'v_L2com': np.asarray(cat.halos['v_L2com'])[order],
+    }
+
+
+## join galaxy host-halo ids to the (id-sorted) halo-center lookup;
+## returns (pos, vel) arrays of shape (Ngal, 3) in the same order as `ids`
+def match_halo_centers(halo_centers, ids):
+    hid = halo_centers['id']
+    ## run_hod returns ids as int64 while the CompaSO ids are uint64; matching dtypes here
+    ## is essential — a mixed int64/uint64 compare promotes to float64 and silently loses
+    ## precision for ids above 2**53, which spuriously fails the match
+    ids   = np.asarray(ids).astype(hid.dtype, copy=False)
+    pos   = np.searchsorted(hid, ids)
+    found = (pos < len(hid)) & (hid[np.clip(pos, 0, len(hid) - 1)] == ids)
+    if not np.all(found):
+        raise ValueError(f'{np.sum(~found)} galaxy host-halo ids not found in CompaSO catalog')
+    return halo_centers['x_L2com'][pos], halo_centers['v_L2com'][pos]
 
 
 ## function to make a cutout from the mock - assuming corrfunc coords (use after applying "update_coords")

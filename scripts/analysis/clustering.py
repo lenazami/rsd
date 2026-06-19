@@ -1,4 +1,4 @@
-# scripts/03_compute_clustering.py
+# scripts/analysis/clustering.py
 # two-point corr functions from generated mock catalogs
 # pass --mode to select HOD variation
 

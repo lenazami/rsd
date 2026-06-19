@@ -1,4 +1,4 @@
-# scripts/01_prepare_sim.py
+# scripts/catalogs/prep_sim.py
 # preps AbacusSummit HDF5 particle subsamples needed by the HOD code.
 # skips if subsamples already exist for given sim/redshift.
 
@@ -22,7 +22,7 @@ def main():
     n_threads = cfg.get('n_threads', 32)
 
     sim_dir       = PROJECT_ROOT / 'abacus'
-    subsample_dir = PROJECT_ROOT / 'subsamples/'
+    subsample_dir = PROJECT_ROOT / 'data' / 'subsamples'
     subsample_path = subsample_dir / sim_name / f'z{z_mock:.3f}'
 
     if subsample_path.exists() and any(subsample_path.glob('*.h5')):

@@ -1,6 +1,6 @@
-# scripts/02_generate_mocks.py
-# gens galaxy mock catalogs w/ AbacusHOD.
-# allows for HOD parameter variations defined in config.yaml.
+# scripts/catalogs/mocks.py
+# gens galaxy mock catalogs w/ Abacushod.
+# allows for hod parameter variations defined in config.yaml.
 # use --test to run a single base case!
 
 # -----------
@@ -23,8 +23,8 @@ import camb
 from camb.dark_energy import DarkEnergyPPF
 from abacusnbody.hod.abacus_hod import AbacusHOD
 
-from src.utils import (PROJECT_ROOT, HOD_CSV, load_config, get_param_dict,
-                       load_hod_table, mock_path)
+from src.utils import (PROJECT_ROOT, HOD_CSV, COORDS, load_config, get_param_dict,
+                       load_hod_table, mock_path, load_halo_centers, match_halo_centers)
 
 
 # -----------
@@ -67,7 +67,7 @@ def abacus_pars2camb_pars(abacus_pars):
     camb_pars.DarkEnergy = DarkEnergyPPF(w=cosmo_info['w0'], wa=cosmo_info['wa'])
     return camb_pars, cosmo_info
 
-## this function varies the HOD params given the config file
+## this function varies the hod params given the config file
 ## this function is called in the loop for the param vals
 def vary_HOD_param(config, tracer='LRG', param=None, param_val=None):
     if param is None:
@@ -76,29 +76,47 @@ def vary_HOD_param(config, tracer='LRG', param=None, param_val=None):
     HOD_params[f'{tracer}_params'][param] = param_val
     return HOD_params
 
-def mock2fits(mock_dict, tracer, filepath, mock_info, cosmo_info, HOD_info):
+def mock2fits(mock_dict, tracer, filepath, mock_info, cosmo_info, HOD_info, halo_centers):
+    gal   = mock_dict[tracer]
+    Ncent = gal['Ncent']
+    Ntot  = len(gal['x'])
+
     col_names = ('x', 'y', 'z', 'vx', 'vy', 'vz', 'mass')
-    cols = [mock_dict[tracer][k] for k in col_names]
+    cols = [gal[k] for k in col_names]
     t = Table(cols, names=col_names)
+
+    ## host halo id (from run_hod) + centrals: first Ncent rows are centrals
+    t['halo_id'] = np.asarray(gal['id'])
+    is_central = np.zeros(Ntot, dtype='i4')
+    is_central[:Ncent] = 1
+    t['is_central'] = is_central
+
+    ## join halo centers on host halo id.
+    halo_pos, halo_vel = match_halo_centers(halo_centers, gal['id'])
+    for i, c in enumerate(COORDS):
+        t[f'halo_{c}']  = halo_pos[:, i]
+    for i, c in enumerate(COORDS):
+        t[f'halo_v{c}'] = halo_vel[:, i]
+
     t.meta['MOCK_INFO']  = json.dumps(mock_info)
     t.meta['COSMO_INFO'] = json.dumps(cosmo_info)
     t.meta['HOD_INFO']   = json.dumps(HOD_info)
     t.write(filepath, format='fits', overwrite=True)
 
-## load baseline HOD params from lrg_params.csv for given tracer/model/z combination
+## load baseline hod params from lrg_params.csv for given tracer/model/z combination
 ## satellite profile params (s, s_v, s_p, s_r, Acent, Asat = 0) and incompleteness (ic = 1)
 def load_lrg_hod_params(csv_path, tracer, model, z):
     hod_table = load_hod_table(csv_path)
     key = (tracer, model, float(z))
     if key not in hod_table:
-        raise ValueError(f'no HOD params found for tracer={tracer}, model={model}, z={z} in {csv_path}')
+        raise ValueError(f'no hod params found for tracer={tracer}, model={model}, z={z} in {csv_path}')
     return asdict(hod_table[key])
 
-## build the full AbacusHOD config dict (sim_params + HOD_params) from config.yaml + CSV
+## build the full abacushod config dict (sim_params + hod_params) from config.yaml + csv
 def build_abacus_config(sim_name, z_mock, tracer, hod_model):
     lrg_params    = load_lrg_hod_params(HOD_CSV, tracer=tracer, model=hod_model, z=z_mock)
     sim_dir       = PROJECT_ROOT / 'abacus'
-    subsample_dir = PROJECT_ROOT / 'subsamples/'
+    subsample_dir = PROJECT_ROOT / 'data' / 'subsamples'
     mock_dir    = PROJECT_ROOT / 'results' / 'mocks'
     return {
         'sim_params': {
@@ -118,7 +136,7 @@ def build_abacus_config(sim_name, z_mock, tracer, hod_model):
         },
     }
 
-## writes the HOD config dict to config/hod/, creating parent dirs as needed
+## writes the hod config dict to config/hod/, creating parent dirs as needed
 def write_hod_config(config, sim_type, tracer):
     config_dir = PROJECT_ROOT / 'config' / 'hod'
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -185,7 +203,7 @@ def main():
 
     if args.test:
         print('='*50)
-        print('TEST MODE: running single base case, no HOD variation')
+        print('TEST MODE: running base case')
         print(f'  sim_name = {sim_name}')
         print(f'  z_mock   = {z_mock}')
         print('='*50)
@@ -194,7 +212,7 @@ def main():
         n_mocks    = 1
         seed_vals  = seed_vals[:1]
 
-    ## build AbacusHOD config from config.yaml + CSV and write it to config/hod/
+    ## build Abacushod config from config.yaml + CSV and write it to config/hod/
     abacus_cfg = build_abacus_config(sim_name, z_mock, tracer, hod_model)
     write_hod_config(abacus_cfg, sim_type, tracer)
 
@@ -235,6 +253,12 @@ def main():
     pprint(mock_info)
     print()
 
+    ## load host-halo centers once (same for every mock of this sim); run_hod does not
+    ## expose them, so we join x_L2com/v_L2com from the cleaned CompaSO catalog by halo id
+    print('loading host-halo centers from the compaso catalog')
+    halo_centers = load_halo_centers(sim_params['sim_dir'], sim_name, z)
+    print()
+
     for param_name, param_vals in param_dict.items():
         param = None if param_name == 'base' else param_name
         for i, val in enumerate(param_vals):
@@ -271,7 +295,7 @@ def main():
                 filepath.parent.mkdir(parents=True, exist_ok=True)  ## auto-create results/mocks/ subdirs
 
                 mock2fits(mock_dict, tracer, filepath, mock_info, cosmo_info,
-                          HOD_params[f'{tracer}_params'])
+                          HOD_params[f'{tracer}_params'], halo_centers)
 
                 print(f'mock saved @ {filepath}')
                 print('-'*50)

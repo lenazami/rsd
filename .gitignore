@@ -5,7 +5,7 @@ config/
 plots/
 notebooks/
 
-data/lrg_params.csv
+data/*_params.csv
 .agents/
 .codex/
 CLAUDE.md
