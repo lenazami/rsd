@@ -1,18 +1,16 @@
 # scripts/catalogs/mocks.py
 # gens galaxy mock catalogs w/ Abacushod.
-# allows for hod parameter variations defined in config.yaml.
-# use --test to run a single base case!
+# allows for hod parameter variations defined in config.yaml. 
+# TODO: is the config.yaml thing still true?
+# default run makes one base-hod mock; use flags for more seeds or variations.
 
 # -----------
 # IMPORTS
 # -----------
 import argparse
 import ast
-import copy
 import json
 import time
-from dataclasses import asdict
-from pathlib import Path
 from pprint import pprint
 
 import numpy as np
@@ -23,17 +21,17 @@ import camb
 from camb.dark_energy import DarkEnergyPPF
 from abacusnbody.hod.abacus_hod import AbacusHOD
 
-from src.utils import (PROJECT_ROOT, HOD_CSV, COORDS, load_config, get_param_dict,
-                       load_hod_table, mock_path, load_halo_centers, match_halo_centers)
+from src.utils import PATHS, COORDS, load_config, build_sim_params, build_hod_flags
 
+from scripts.catalogs.hod_variation import (hod_var_path, load_hod_var,
+                                            load_lrg_hod_params, set_HOD_params)
+from scripts.catalogs.prep_sim import check_subsamples
 
 # -----------
 # FUNCTIONS
 # -----------
-
-## this function parses through the abacus.pars file
+# this function parses thru the abacus.pars file
 def get_abacus_pars(filename):
-
     abacus_pars = {}
     with open(filename) as f:
         for line in f.readlines()[:-2]:
@@ -44,7 +42,7 @@ def get_abacus_pars(filename):
                 abacus_pars[key] = val
     return abacus_pars
 
-## this function scrapes the abacus_pars to get CAMB cosmology params
+# this function scrapes the abacus_pars to get CAMB cosmology params
 def abacus_pars2camb_pars(abacus_pars):
     cosmo_info = {
         'H0':        abacus_pars['H0'],
@@ -59,24 +57,12 @@ def abacus_pars2camb_pars(abacus_pars):
         'w0': abacus_pars['w0'],
         'wa': abacus_pars['wa'],
     }
-    camb_pars = camb.set_params(
-        ombh2=cosmo_info['ombh2'], omch2=cosmo_info['omch2'], omk=cosmo_info['omk'],
-        tau=cosmo_info['tau'], As=cosmo_info['As'], ns=cosmo_info['ns'],
-        thetastar=cosmo_info['thetastar'],
-    )
+    camb_pars = camb.set_params(**{k: cosmo_info[k] for k in
+        ('ombh2', 'omch2', 'omk', 'tau', 'As', 'ns', 'thetastar')})
     camb_pars.DarkEnergy = DarkEnergyPPF(w=cosmo_info['w0'], wa=cosmo_info['wa'])
     return camb_pars, cosmo_info
 
-## this function varies the hod params given the config file
-## this function is called in the loop for the param vals
-def vary_HOD_param(config, tracer='LRG', param=None, param_val=None):
-    if param is None:
-        return config['HOD_params']
-    HOD_params = copy.deepcopy(config['HOD_params'])
-    HOD_params[f'{tracer}_params'][param] = param_val
-    return HOD_params
-
-def mock2fits(mock_dict, tracer, filepath, mock_info, cosmo_info, HOD_info, halo_centers):
+def mock2fits(mock_dict, tracer, filepath, mock_info, cosmo_info, HOD_info, halo_data):
     gal   = mock_dict[tracer]
     Ncent = gal['Ncent']
     Ntot  = len(gal['x'])
@@ -85,17 +71,16 @@ def mock2fits(mock_dict, tracer, filepath, mock_info, cosmo_info, HOD_info, halo
     cols = [gal[k] for k in col_names]
     t = Table(cols, names=col_names)
 
-    ## host halo id (from run_hod) + centrals: first Ncent rows are centrals
+    # host halo id (from run_hod) + centrals: centrals=[:Ncent]
     t['halo_id'] = np.asarray(gal['id'])
     is_central = np.zeros(Ntot, dtype='i4')
     is_central[:Ncent] = 1
     t['is_central'] = is_central
 
-    ## join halo centers on host halo id.
-    halo_pos, halo_vel = match_halo_centers(halo_centers, gal['id'])
+    # join halo centers on host halo id.
+    halo_pos, halo_vel = match_halo_centers(halo_data, gal['id'])
     for i, c in enumerate(COORDS):
         t[f'halo_{c}']  = halo_pos[:, i]
-    for i, c in enumerate(COORDS):
         t[f'halo_v{c}'] = halo_vel[:, i]
 
     t.meta['MOCK_INFO']  = json.dumps(mock_info)
@@ -103,127 +88,38 @@ def mock2fits(mock_dict, tracer, filepath, mock_info, cosmo_info, HOD_info, halo
     t.meta['HOD_INFO']   = json.dumps(HOD_info)
     t.write(filepath, format='fits', overwrite=True)
 
-## load baseline hod params from lrg_params.csv for given tracer/model/z combination
-## satellite profile params (s, s_v, s_p, s_r, Acent, Asat = 0) and incompleteness (ic = 1)
-def load_lrg_hod_params(csv_path, tracer, model, z):
-    hod_table = load_hod_table(csv_path)
-    key = (tracer, model, float(z))
-    if key not in hod_table:
-        raise ValueError(f'no hod params found for tracer={tracer}, model={model}, z={z} in {csv_path}')
-    return asdict(hod_table[key])
+# run_hod does not output host-halo centers, so we do it ourselves
+def match_halo_centers(halo_data, ids):
+    hid   = halo_data['hid']
+    ids   = np.asarray(ids).astype(hid.dtype, copy=False)
+    pos   = np.searchsorted(hid, ids)
+    found = (pos < len(hid)) & (hid[np.clip(pos, 0, len(hid) - 1)] == ids)
+    if not np.all(found):
+        raise ValueError(f'{np.sum(~found)} galaxy host-halo ids not found in halo_data')
+    return halo_data['hpos'][pos], halo_data['hvel'][pos]
 
-## build the full abacushod config dict (sim_params + hod_params) from config.yaml + csv
+# build abacushod config dict (sim_params + hod_params) from config.yaml + csv
 def build_abacus_config(sim_name, z_mock, tracer, hod_model):
-    lrg_params    = load_lrg_hod_params(HOD_CSV, tracer=tracer, model=hod_model, z=z_mock)
-    sim_dir       = PROJECT_ROOT / 'abacus'
-    subsample_dir = PROJECT_ROOT / 'data' / 'subsamples'
-    mock_dir    = PROJECT_ROOT / 'results' / 'mocks'
+    lrg_params = load_lrg_hod_params(PATHS.hod_csv, tracer=tracer, model=hod_model, z=z_mock)
     return {
-        'sim_params': {
-            'sim_name':      sim_name,
-            'sim_dir':       str(sim_dir),
-            'subsample_dir': str(subsample_dir),
-            'output_dir':    str(mock_dir),
-            'z_mock':        float(z_mock),
-        },
+        'sim_params': build_sim_params(sim_name, z_mock),
         'HOD_params': {
-            'tracer_flags': {tracer: True, 'ELG': False, 'QSO': False},
-            'want_ranks':   True,    ## required for s_v satellite profile variation
-            'want_AB':      False,
-            'want_rsd':     True,
-            'want_shear':   False,
+            **build_hod_flags(tracer, want_rsd=False),
             f'{tracer}_params': lrg_params,
         },
     }
 
-## writes the hod config dict to config/hod/, creating parent dirs as needed
+# writes the hod config dict to config/hod/, creating parent dirs as needed
 def write_hod_config(config, sim_type, tracer):
-    config_dir = PROJECT_ROOT / 'config' / 'hod'
-    config_dir.mkdir(parents=True, exist_ok=True)
-    yaml_path = config_dir / f'{tracer}-config-{sim_type}.yaml'
+    yaml_path = PATHS.hod_config(sim_type, tracer)
+    yaml_path.parent.mkdir(parents=True, exist_ok=True)
     with open(yaml_path, 'w') as f:
         yaml.dump(config, f, default_flow_style=False)
     print(f'HOD config written to {yaml_path}')
     return yaml_path
 
-## prepare_sim generates the HDF5 subsamples if they don't already exist
-def ensure_subsamples(sim_params, hod_flags, n_threads):
-    subsample_path = (Path(sim_params['subsample_dir'])
-                      / sim_params['sim_name']
-                      / f"z{sim_params['z_mock']:.3f}")
-    if subsample_path.exists() and any(subsample_path.glob('*.h5')):
-        print(f'subsamples already exist at {subsample_path}! skipping prepare_sim')
-        return
-
-    from abacusnbody.hod.prepare_sim import main as prepare_main
-
-    print(f'no subsamples found at {subsample_path}, running prepare_sim...')
-    prepare_cfg = {
-        'sim_params':  {**sim_params, 'cleaned_halos': 1},  ## remove unphysical CompaSO fragments
-        'HOD_params':  {
-            'tracer_flags': hod_flags['tracer_flags'],
-            'want_ranks':   hod_flags['want_ranks'],
-            'want_AB':      hod_flags['want_AB'],
-            'want_shear':   hod_flags['want_shear'],
-            'want_rsd':     hod_flags['want_rsd'],
-        },
-        'prepare_sim': {'Nthread_per_load': n_threads, 'Nparallel_load': 1},
-    }
-    config_dir = PROJECT_ROOT / 'config' / 'sims'
-    config_dir.mkdir(parents=True, exist_ok=True)
-    cfg_path = config_dir / 'prepare_sim_auto.yaml'
-    with open(cfg_path, 'w') as f:
-        yaml.dump(prepare_cfg, f, default_flow_style=False)
-    print(f'prepare_sim config written to {cfg_path}')
-    prepare_main(str(cfg_path))
-    print('prepare_sim done')
-
-
-# -----------
-# MAIN
-# -----------
-def main():
-    parser = argparse.ArgumentParser(description='generate galaxy mock catalogs w/ abacushod')
-    parser.add_argument('--test', action='store_true',
-                        help='run base-case mock only')
-    args = parser.parse_args()
-
-    cfg       = load_config()
-    sim_name  = cfg['sim']['name']
-    sim_type  = cfg['sim']['type']
-    z_mock    = float(cfg['sim']['z'])
-    tracer    = cfg['tracer']
-    hod_model = cfg['hod_model']
-    n_mocks   = cfg['n_mocks']
-    seed_base = cfg['seed_base']
-    n_threads = cfg.get('n_threads', 32)
-    param_dict = get_param_dict(cfg)
-
-    seed_vals = np.asarray([int(seed_base + i) for i in range(n_mocks)])
-
-    if args.test:
-        print('='*50)
-        print('TEST MODE: running base case')
-        print(f'  sim_name = {sim_name}')
-        print(f'  z_mock   = {z_mock}')
-        print('='*50)
-        print()
-        param_dict = {'base': [None]}
-        n_mocks    = 1
-        seed_vals  = seed_vals[:1]
-
-    ## build Abacushod config from config.yaml + CSV and write it to config/hod/
-    abacus_cfg = build_abacus_config(sim_name, z_mock, tracer, hod_model)
-    write_hod_config(abacus_cfg, sim_type, tracer)
-
-    sim_params = abacus_cfg['sim_params']
-    print('using the following Abacus sim params for the mocks')
-    pprint(sim_params)
-    print()
-
-    ## run prepare_sim to generate HDF5 subsamples if they do not exist
-    ensure_subsamples(sim_params, abacus_cfg['HOD_params'], n_threads)
-
+# load cosmology (via CAMB) + general mock info for the fits header
+def setup_cosmology(sim_params):
     abacus_pars = get_abacus_pars(
         f"{sim_params['sim_dir']}/{sim_params['sim_name']}/abacus.par"
     )
@@ -253,57 +149,109 @@ def main():
     pprint(mock_info)
     print()
 
-    ## load host-halo centers once (same for every mock of this sim); run_hod does not
-    ## expose them, so we join x_L2com/v_L2com from the cleaned CompaSO catalog by halo id
-    print('loading host-halo centers from the compaso catalog')
-    halo_centers = load_halo_centers(sim_params['sim_dir'], sim_name, z)
+    return cosmo_info, mock_info
+
+# -----------
+# MAIN
+# -----------
+def main():
+    parser = argparse.ArgumentParser(description='generate galaxy mock catalogs w/ abacushod')
+    parser.add_argument('--n-mocks', type=int, default=1,
+                        help='number of sequential seeds to run; default is one base-HOD mock')
+    parser.add_argument('--vary', action='store_true',
+                        help='loop over the sampled HOD variations from config.yaml')
+    args = parser.parse_args()
+
+    cfg       = load_config()
+    sim_name  = cfg['sim']['name']
+    sim_type  = cfg['sim']['type']
+    z_mock    = float(cfg['sim']['z'])
+    tracer    = cfg['tracer']
+    hod_model = cfg['hod_model']
+    n_mocks   = args.n_mocks
+    seed_base = cfg['seed_base']
+    n_threads = cfg.get('n_threads', 32)
+
+    if n_mocks < 1:
+        raise ValueError('--n-mocks must be >= 1')
+
+    seed_vals = np.asarray([int(seed_base + i) for i in range(n_mocks)])
+
+    # vars in format (variation_id, overrides)
+    if args.vary:
+        var_csv = hod_var_path(cfg['hod_variation']['name'])
+        if not var_csv.exists():
+            raise FileNotFoundError(f'no HOD variation csv at {var_csv}; generate using '
+                                    f'scripts/catalogs/hod_variation.py')
+        variations = load_hod_var(var_csv)
+        print(f'running {len(variations)} variations from {var_csv}')
+    else:
+        variations = [(None, {})]
+        print(f'running base case for {len(seed_vals)} mock(s)')
     print()
 
-    for param_name, param_vals in param_dict.items():
-        param = None if param_name == 'base' else param_name
-        for i, val in enumerate(param_vals):
-            HOD_params = vary_HOD_param(abacus_cfg, tracer=tracer, param=param, param_val=val)
+    # build Abacushod config from config.yaml + CSV and write it to config/hod/
+    abacus_cfg = build_abacus_config(sim_name, z_mock, tracer, hod_model)
+    write_hod_config(abacus_cfg, sim_type, tracer)
 
-            print('-'*10 + f' varying {param_name} @ {val} [{i+1} of {len(param_vals)}] ' + '-'*10)
-            print('using the following HOD params')
-            pprint(HOD_params)
-            print()
+    sim_params = abacus_cfg['sim_params']
+    print('using the following Abacus sim params for the mocks')
+    pprint(sim_params)
+    print()
 
-            ## now we initialize the HOD Ball object for the given set of params
-            print('initializing the HOD Ball object')
-            init_start = time.time()
-            Ball = AbacusHOD(sim_params, HOD_params)
-            print('creating the HOD Ball took {}'.format(time.time() - init_start))
-            print()
+    # checks if submsaples don't exist and errors out
+    # TODO: might be better to just record the file error and only process existing files?
+    complete, missing, n_slabs = check_subsamples(sim_params, abacus_cfg['HOD_params'])
+    if not complete:
+        raise FileNotFoundError(
+            f'subsamples incomplete for {sim_name} z{z_mock:.3f}: {len(missing)} of '
+            f'{n_slabs} slabs missing {missing}. run scripts/catalogs/prep_sim.py first.'
+        )
 
-            ## for a given Ball object, run HOD to generate n_mocks mocks with synced seeds
-            mocks_start = time.time()
+    cosmo_info, mock_info = setup_cosmology(sim_params)
 
-            for sim_idx in range(n_mocks):
-                seed = seed_vals[sim_idx]
-                print('-'*50)
-                print(f'making mock {sim_idx+1} of {n_mocks}')
+    for vi, (variation_id, overrides) in enumerate(variations):
+        HOD_params = set_HOD_params(abacus_cfg, tracer=tracer, overrides=overrides)
+        label = 'base' if variation_id is None else f'variation {variation_id}'
 
-                mock_dict = Ball.run_hod(Ball.tracers, want_rsd=False, Nthread=n_threads,
-                                         reseed=seed, verbose=True)
+        print('-'*10 + f' {label} [{vi+1} of {len(variations)}] ' + '-'*10)
+        print('using the following HOD params')
+        pprint(HOD_params[f'{tracer}_params'])
+        print()
 
-                ## adding central and satellite galaxy info to the mock_info dictionary
-                mock_info['Ncent'] = mock_dict[tracer]['Ncent']
-                mock_info['Nsat']  = len(mock_dict[tracer]['x']) - mock_dict[tracer]['Ncent']
+        # now we initialize the HOD Ball object for the given set of params
+        print('initializing the HOD Ball object')
+        init_start = time.time()
+        Ball = AbacusHOD(sim_params, HOD_params)
+        print('creating the HOD Ball took {}'.format(time.time() - init_start))
+        print()
 
-                filepath = mock_path(tracer, param, val, seed, sim_type)
-                filepath.parent.mkdir(parents=True, exist_ok=True)  ## auto-create results/mocks/ subdirs
+        # for a given Ball object, run HOD to generate a mock per seed with synced seeds
+        mocks_start = time.time()
 
-                mock2fits(mock_dict, tracer, filepath, mock_info, cosmo_info,
-                          HOD_params[f'{tracer}_params'], halo_centers)
+        for sim_idx, seed in enumerate(seed_vals):
+            print('-'*50)
+            print(f'making mock {sim_idx+1} of {len(seed_vals)} (seed={seed})')
 
-                print(f'mock saved @ {filepath}')
-                print('-'*50)
-            print(f'making {n_mocks} mocks for {param_name}={val} took {time.time()-mocks_start}s')
-            print()
+            mock_dict = Ball.run_hod(Ball.tracers, want_rsd=False, Nthread=n_threads,
+                                     reseed=seed, verbose=True)
+
+            # adding central and satellite galaxy info to the mock_info dictionary
+            mock_info['Ncent'] = mock_dict[tracer]['Ncent']
+            mock_info['Nsat']  = len(mock_dict[tracer]['x']) - mock_dict[tracer]['Ncent']
+
+            filepath = PATHS.mock(tracer, seed, sim_type, variation_id=variation_id)
+            filepath.parent.mkdir(parents=True, exist_ok=True)  # auto-create data/mocks/ subdirs
+
+            mock2fits(mock_dict, tracer, filepath, mock_info, cosmo_info,
+                      HOD_params[f'{tracer}_params'], Ball.halo_data)
+
+            print(f'mock saved @ {filepath}')
+            print('-'*50)
+        print(f'making {len(seed_vals)} mocks for {label} took {time.time()-mocks_start}s')
+        print()
 
     print('script ran successfully!')
-
 
 if __name__ == '__main__':
     main()

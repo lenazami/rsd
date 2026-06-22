@@ -1,11 +1,12 @@
 abacus
-data/subsamples/
 results/
 config/
 plots/
 notebooks/
 
 data/*_params.csv
+data/subsamples/
+data/mocks/
 .agents/
 .codex/
 CLAUDE.md

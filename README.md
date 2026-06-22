@@ -25,20 +25,47 @@ abacus requires yamls in order to perform its things, so we store any and all ne
 
 all parameters are set in `config.yaml`. run scripts in order from the repo root:
 
+
+Analysis outputs are written to `results/` (gitignored). Auto-generated AbacusHOD YAML configs are written to `config/` (gitignored).
+
+### Catalog generation
+
 ```bash
-python scripts/catalogs/prep_sim.py         # build HDF5 particle subsamples (skips if done)
-python scripts/catalogs/mocks.py            # generate HOD mock catalogs
-python scripts/analysis/clustering.py --mode base   # two-point correlation functions
+python scripts/catalogs/prep_sim.py
+python scripts/catalogs/mocks.py
+python scripts/catalogs/mocks.py --n-mocks 5
+python scripts/catalogs/mocks.py --vary
+python scripts/analysis/clustering.py --variation base   # two-point correlation functions
 ```
+The available flags on mocks.py are  which 
 
-Outputs are written to `results/` (gitignored). Auto-generated AbacusHOD YAML configs are written to `config/` (gitignored).
+| flag | description |
+| :--: | :-- |
+| `--n-mocks` | determines the number of mock catalogs will be built per HOD |
+| `--vary` | generates HOD variations | 
 
-## Structure
-scripts are split into `catalogs/` (build the mock catalogs from the simulation) and
-`analysis/` (measure statistics from them).
-```
+under `hod_variation.py` 
+
+filename suffixes need to match abacusnbody.hod.prepare_sim.prepare_slab 
+
+| flag | description |
+| :--: | :-- |
+| `want_rsd` | ??? |
+| `want_ranks` |  | 
+| `want_AB` | want full 10% subsample rather than 3% from just A | 
+
+
+| suffix | description |
+| :--: | :-- |
+| `_MT` | ELG/QSO tracers |
+| `_withranks` | on particles when want_ranks | 
+
+
+## Tree
+# TODO: fix this thing
+<!-- ```
 config.yaml          # edit this to configure the pipeline
-src/utils.py         # shared utilities (I/O, coordinate transforms, clustering, AP params)
+src/utils.py         # shared utilities (I/O, coordinate transforms, paths)
 scripts/
   catalogs/
     prep_sim.py          # AbacusSummit prepare_sim (HDF5 subsamples)
@@ -49,4 +76,22 @@ data/
   lrg_params.csv         # HOD baseline parameters (DESI DR2)
   bins/                  # bin edge files for clustering (??)
   subsamples/            # HDF5 particle subsamples from prepare_sim (gitignored)
+  mocks/
+``` -->
+
+```
+config.yaml # edit this to configure the entire pipeline
+README.md # you're here!
+config/
+├── hod/
+└── sims/
+src/
+└── utils.py      # io, coordinate transforms, pathfinding, etc.
+scripts/
+├── analysis/
+│   ├── clustering.py      # two-point correlation functions
+└── catalogs/
+    ├── hod_variation.py   # generates hod variations using sobol sampling
+    ├── mocks.py           # generates mocks from subsamples
+    └── prep_sim.py        # generates subsamples from raw abacus data
 ```

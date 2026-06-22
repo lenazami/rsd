@@ -4,20 +4,29 @@
 sim:
   name: AbacusSummit_highbase_c000_ph100
   type: fiducial   # label used in output filenames
-
-  # redshift of the sim snapshot to use
-  z: 0.5
+  z: 0.5 # redshift of the sim snapshot to use
 
 tracer: LRG
 hod_model: base    # which row in data/lrg_params.csv to use as baseline HOD
 
-n_mocks: 20
-seed_base: 101     # mocks use seeds seed_base, seed_base+1, ..., seed_base+n_mocks-1
+# n_mocks: 5         # use scripts/catalogs/mocks.py --n-mocks 5 to run all of these
+seed_base: 101     # mocks use seeds seed_base, seed_base+1, ...
 
-# HOD parameter variations — each key must match a field in HODParams (src/utils.py)
-hod_variations:
-  alpha_c: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-  s_v:     [-1.0, -0.8, -0.6, -0.4, -0.2, 0.2, 0.4, 0.6, 0.8, 1.0]
+# Sobol-sampled HOD parameter variation. 
+# generate csv w scripts/catalogs/hod_variation.py,
+# run mocks.py --variations to loop over it
+hod_variation:
+  name: lrg_fiducial          # -> data/hod_vars/lrg_fiducial.csv
+  n_samples:   1024           # rounded up to a power of 2 for Sobol balance
+  seed:        0              # fixes the sampling (same n_samples + seed -> same csv)
+  ranges:
+    logM_cut: [12.5, 13.5]
+    logM1:    [13.5, 14.5]
+    sigma:    [0.0, 0.5]
+    kappa:    [0.0, 1.5]
+    alpha:    [0.5, 1.5]
+    alpha_c:  [0.0, 1.0]
+    alpha_s:  [0.5, 1.5]
 
 clustering:
   corr_type: smu         # smu (multipoles) or rppi (projected)
