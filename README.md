@@ -62,7 +62,7 @@ filename suffixes need to match abacusnbody.hod.prepare_sim.prepare_slab
 
 
 ## Tree
-# TODO: fix this thing
+
 <!-- ```
 config.yaml          # edit this to configure the pipeline
 src/utils.py         # shared utilities (I/O, coordinate transforms, paths)
