@@ -3,301 +3,159 @@
 # -----------
 # IMPORTS
 # -----------
-from dataclasses import dataclass, asdict
-import pandas as pd
+from dataclasses import dataclass
 import numpy as np
-import astropy.units as u
-import astropy.constants as const
 from astropy.table import Table
 import json
-import time
 import yaml
 from pathlib import Path
-
-from pycorr import TwoPointCorrelationFunction
 
 # -----------
 # PATHS
 # -----------
-## PROJECT_ROOT is the repo root (one level up from src/)
+# PROJECT_ROOT is the repo root (one level up from src/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HOD_CSV      = PROJECT_ROOT / 'data/lrg_params.csv'
 COORDS = ('x', 'y', 'z')
 
-# -----------
-# CONFIG
-# -----------
-def load_config(config_path=None):
-    """Load config.yaml from the project root (or a custom path)."""
-    if config_path is None:
-        config_path = PROJECT_ROOT / 'config.yaml'
-    with open(config_path) as f:
-        return yaml.safe_load(f)
+@dataclass(frozen=True)
+class ProjectPaths:
+    root: Path
 
-def get_param_dict(cfg):
-    """Build the HOD variation dict from config: {'base': [None], 'alpha_c': [...], ...}"""
-    variations = cfg.get('hod_variations', {})
-    return {'base': [None], **variations}
+    @property
+    def data(self):
+        return self.root / 'data'
+
+    @property
+    def results(self):
+        return self.root / 'results'
+
+    @property
+    def config_dir(self):
+        return self.root / 'config'
+
+    @property
+    def abacus(self):
+        return self.root / 'abacus'
+
+    @property
+    def mocks(self):
+        return self.data / 'mocks'
+
+    @property
+    def subsamples(self):
+        return self.data / 'subsamples'
+
+    @property
+    def hod_csv(self):
+        return self.data / 'lrg_params.csv'
+
+    def config(self, config_path=None):
+        if config_path is None:
+            return self.root / 'config.yaml'
+        return Path(config_path)
+
+    def hod_var(self, variation_name):
+        return self.data / 'hod_vars' / f'{variation_name}.csv'
+
+    def hod_config(self, sim_type, tracer):
+        return self.config_dir / 'hod' / f'{tracer}-config-{sim_type}.yaml'
+
+    def prepare_sim_config(self, sim_name, z_mock):
+        return self.config_dir / 'sims' / f'prepare_sim_{sim_name}_z{z_mock:.3f}.yaml'
+
+    def halo_info(self, sim_name, z_mock):
+        return self.abacus / sim_name / 'halos' / f'z{z_mock:.3f}' / 'halo_info'
+
+    def subsample_set(self, sim_name, z_mock):
+        return self.subsamples / sim_name / f'z{z_mock:.3f}'
+
+    def mock(self, tracer, seed, sim_type, variation_id=None):
+        if variation_id is None:
+            return self.mocks / 'base' / f'{tracer}mock-base-seed={seed}-{sim_type}.fits'
+        return (self.mocks / 'variation' / f'{tracer}mock-variation-{variation_id}'
+                / f'seed={seed}-{sim_type}.fits')
+
+    def bins(self, corr_type, regime):
+        return self.data / 'bins' / f'{corr_type}_bins_{regime}.npz'
+
+    def xi(self, mode, corr_type, sim_type, regime, rsd, fpar):
+        ap = (fpar != 1)
+        tags = [tag for tag, active in (('rsd', rsd), ('AP', ap)) if active]
+        suffix = '_' + '+'.join(tags) if tags else ''
+        filename = f'xi_{corr_type}_{mode}_{sim_type}_{regime}{suffix}.pkl'
+        return self.results / 'xi' / f'xi_{mode}' / filename
+
+
+PATHS = ProjectPaths(PROJECT_ROOT)
 
 # -----------
 # FUNCTIONS
 # -----------
-def _get_positions(mock, fpar=1., fperp=1., rsd=False):
-    suffix = '_rsd' if rsd else ''
-    
-    positions = np.empty((3, len(mock)), dtype='f8')
-    positions[0] = mock[f'x{suffix}']
-    positions[1] = mock[f'y{suffix}']
-    positions[2] = mock[f'z{suffix}']
+def load_config(config_path=None):
+    """Load config.yaml from the project root (or a custom path)."""
+    with open(PATHS.config(config_path)) as f:
+        return yaml.safe_load(f)
 
-    if fpar!=1. or fperp!=1.:
-        positions[:2] /= fperp
-        positions[2] /= fpar
-    
-    return positions
-    
-def _mock_info(table, *keys):
-    mock_info = json.loads(table.meta['MOCK_INFO'])
+# the abacushod sim_params block, shared by mocks.py and prep_sim.py
+def build_sim_params(sim_name, z_mock):
+    return {
+        'sim_name':      sim_name,
+        'sim_dir':       str(PATHS.abacus),
+        'subsample_dir': str(PATHS.subsamples),
+        'output_dir':    str(PATHS.mocks),
+        'z_mock':        float(z_mock),
+    }
+
+# the abacushod HOD flags block (tracer_flags + want_* switches), shared by
+def build_hod_flags(tracer):
+    return {
+        'tracer_flags': {tracer: True, 'ELG': False, 'QSO': False},
+        'want_ranks':   True,    # required for s_v satellite profile variation
+        'want_AB':      False,
+        'want_rsd':     False,
+        'want_shear':   False,
+    }
+
+def mock_info(table, *keys):
+    info = json.loads(table.meta['MOCK_INFO'])
     
     if not keys:
-        return mock_info
+        return info
     if len(keys) == 1:
-        return mock_info[keys[0]]
-    return tuple(mock_info[key] for key in keys)
+        return info[keys[0]]
+    return tuple(info[key] for key in keys)
 
-def _correlation(mode, mock, edges, rsd, fpar, fperp, nthreads=32):
-    positions = _get_positions(mock, rsd=rsd, fpar=fpar, fperp=fperp)
-    L = _mock_info(mock, 'boxsize')
-    boxsize = [L / fperp, L / fperp, L / fpar]
+# all useful functions for manipulating the data are here
+# function to load the data into astropy tables
+def get_mock(tracer, seed=101, sim_type='fiducial', variation_id=None):
+    return Table.read(PATHS.mock(tracer, seed, sim_type, variation_id))
 
-    return TwoPointCorrelationFunction(mode=mode, edges=edges,
-                                       data_positions1=positions,
-                                       data_positions2=positions,
-                                       engine='corrfunc',
-                                       nthreads=nthreads,
-                                       los='z',
-                                       boxsize=boxsize)
-    
-## all useful functions for manipulating the data are here
-## function to load the data into astropy tables
-## mocks live under results/mocks/<param>/<tracer>mock-<tag>-seed=<seed>-<sim_type>.fits
-def mock_path(tracer, param, param_value, seed, sim_type):
-    base = param is None
-    sub  = 'base' if base else param
-    tag  = 'base' if base else f'{param}={param_value}'
-    return PROJECT_ROOT / 'results' / 'mocks' / sub / f'{tracer}mock-{tag}-seed={seed}-{sim_type}.fits'
-
-
-def get_mock(tracer, seed=101, param=None, param_value=None, sim_type='fiducial'):
-    return Table.read(mock_path(tracer, param, param_value, seed, sim_type))
-
-
-## function to change positions to match corrfunc
+# function to change positions to match corrfunc
 def update_coords(table):
-    boxsize = _mock_info(table, 'boxsize')
+    boxsize = mock_info(table, 'boxsize')
     for coord in COORDS:
         table[coord] += boxsize/2.
 
     return table
 
-
-## function to add an RSD column to the data
+# function to add an RSD column to the data
 def add_rsd(table,los='z'): 
     if los not in COORDS:
         raise ValueError('los must be one of {}'.format(COORDS))
 
-    boxsize, Hz, a = _mock_info(table, 'boxsize', 'Hz', 'a')
+    boxsize, Hz, a, h0 = mock_info(table, 'boxsize', 'Hz', 'a', 'h0')
 
     for coord in COORDS:
         rsd = table[coord]
         if coord == los:
-            rsd = rsd + table[f'v{coord}']/(Hz*a)
+            rsd = rsd + table[f'v{coord}']*h0/(Hz*a)
         table[f'{coord}_rsd'] = rsd % boxsize
         
     return table
 
-def load_mock(tracer, seed, param, param_value, sim_type, rsd=True):
-    mock = get_mock(tracer=tracer, seed=seed, param=param,
-                    param_value=param_value, sim_type=sim_type)
+def load_mock(tracer, seed, sim_type, variation_id=None, rsd=True, los='z'):
+    mock = get_mock(tracer=tracer, seed=seed, sim_type=sim_type, variation_id=variation_id)
     mock = update_coords(mock)
     if rsd:
-        mock = add_rsd(mock, los='z')
+        mock = add_rsd(mock, los=los)
     return mock
-
-
-## function to split table into centrals and satellites
-def split_censat(table):
-    Ncent, Nsat = _mock_info(table, 'Ncent', 'Nsat')
-
-    print('splitting the mock into {} centrals and {} satellites'.format(Ncent,Nsat))
-
-    cents = table[:Ncent]
-    sats = table[Ncent:]
-
-    return cents, sats
-
-
-## run_hod exposes the host halo id and mass per galaxy, but NOT the halo center.
-## these two helpers read the halo-center pos/vel from the (cleaned) CompaSO catalog
-## and join them onto a mock by host halo id. load_halo_centers reads ONLY the four
-## needed fields and is called once per sim; match_halo_centers does the per-mock join.
-def load_halo_centers(sim_dir, sim_name, z, cleaned=True):
-    from abacusnbody.data.compaso_halo_catalog import CompaSOHaloCatalog
-    halo_dir = Path(sim_dir) / sim_name / 'halos' / f'z{z:.3f}'
-    cat = CompaSOHaloCatalog(str(halo_dir), cleaned=cleaned,
-                             fields=['id', 'x_L2com', 'v_L2com', 'N'])
-    hid   = np.asarray(cat.halos['id'])
-    order = np.argsort(hid)   ## sort by id so match_halo_centers can use searchsorted
-    return {
-        'id':      hid[order],
-        'x_L2com': np.asarray(cat.halos['x_L2com'])[order],
-        'v_L2com': np.asarray(cat.halos['v_L2com'])[order],
-    }
-
-
-## join galaxy host-halo ids to the (id-sorted) halo-center lookup;
-## returns (pos, vel) arrays of shape (Ngal, 3) in the same order as `ids`
-def match_halo_centers(halo_centers, ids):
-    hid = halo_centers['id']
-    ## run_hod returns ids as int64 while the CompaSO ids are uint64; matching dtypes here
-    ## is essential — a mixed int64/uint64 compare promotes to float64 and silently loses
-    ## precision for ids above 2**53, which spuriously fails the match
-    ids   = np.asarray(ids).astype(hid.dtype, copy=False)
-    pos   = np.searchsorted(hid, ids)
-    found = (pos < len(hid)) & (hid[np.clip(pos, 0, len(hid) - 1)] == ids)
-    if not np.all(found):
-        raise ValueError(f'{np.sum(~found)} galaxy host-halo ids not found in CompaSO catalog')
-    return halo_centers['x_L2com'][pos], halo_centers['v_L2com'][pos]
-
-
-## function to make a cutout from the mock - assuming corrfunc coords (use after applying "update_coords")
-def get_cutout(table,size,center):
-    if table['x'].min() < 0.:
-        print('need to first use "update_coords"')
-        return
-    
-    size, center = np.asarray(size), np.asarray(center)
-    
-    boxsize = _mock_info(table, 'boxsize')
-    lower = center - size/2.
-    upper = center + size/2.
-    
-    if np.any(lower < 0.) or np.any(upper > boxsize):
-        print('cutout is out of bounds')
-        return
-
-    mask = (
-        (table['x'] >= lower[0]) & (table['x'] <= upper[0]) &
-        (table['y'] >= lower[1]) & (table['y'] <= upper[1]) &
-        (table['z'] >= lower[2]) & (table['z'] <= upper[2])
-    )
-
-    cutout = table[mask]
-    return cutout
-
-def paramvar_mocks(tracer='LRG', seed=101, param_dict=None, sim_type='fiducial', rsd=True):
-    if param_dict is None:
-        param_dict = {'base': [None]}
-    data_dict = {}
-    for key in param_dict:
-        param = None if key == 'base' else key
-        data_dict[key] = [load_mock(tracer=tracer, seed=seed, param=param,
-                                    param_value=pv, sim_type=sim_type, rsd=rsd)
-                          for pv in param_dict[key]]
-    return data_dict
-
-
-def mock2xi(mock, corr_type, edges, pimax=None, ells=None,
-            rsd=True, fpar=1., fperp=1., nthreads=32):
-    start = time.time()
-
-    mode_kwargs = {
-        'rppi': {'pimax': pimax},
-        'smu': {'ells': ells},
-    }
-    
-    if corr_type not in mode_kwargs:
-        raise ValueError('corr_type not supported :(')
-    
-    result = _correlation(corr_type, mock, edges, rsd, fpar, fperp, nthreads=nthreads)
-    xi_2d_vals = result.get_corr()
-    _, xi_1d_vals = result(return_sep=True, **mode_kwargs[corr_type])
-
-    print('took {}s to compute xi'.format(time.time()-start))
-    return xi_2d_vals, xi_1d_vals
-
-def ret_APparams(results_true,results_assumed,z):
-    
-    Hz_t = results_true.hubble_parameter(z) * u.km/u.s/u.Mpc
-    Hz_a = results_assumed.hubble_parameter(z) * u.km/u.s/u.Mpc
-    
-    r_par_t = (const.c/Hz_t).to(u.Mpc)
-    r_par_a = (const.c/Hz_a).to(u.Mpc)
-
-    r_perp_t = results_true.comoving_radial_distance(z) * u.Mpc
-    r_perp_a = results_assumed.comoving_radial_distance(z) * u.Mpc
-    
-    fpar = r_par_t/r_par_a
-    fperp = r_perp_t/r_perp_a
-    
-    alpha_iso = (fpar*fperp**2)**(1/3)
-    alpha_AP = fpar/fperp
-    
-    return fpar.value, fperp.value, alpha_iso.value, alpha_AP.value
-
-@dataclass(frozen=True)
-class HODParams:
-    logM_cut: float
-    logM1: float
-    sigma: float
-    kappa: float
-    alpha: float
-    alpha_c: float
-    alpha_s: float
-
-    Bcent: float = 0.
-    Bsat: float = 0.
-
-    s: float = 0.
-    s_v: float = 0.
-    s_p: float = 0.
-    s_r: float = 0.
-
-    Acent: float = 0.
-    Asat: float = 0.
-
-    ic: float = 1.
-
-class HODDatabase:
-
-    def __init__(self, csv_path):
-        self._params = load_hod_table(csv_path)
-
-    def get(self, tracer, model, z):
-        return self._params[(tracer, model, float(z))]
-    
-def load_hod_table(csv_path):
-    df = pd.read_csv(csv_path)
-
-    params = {}
-
-    for _, row in df.iterrows():
-        key = (
-            row["TRACER"],
-            row["MODEL"],
-            float(row["ZSNAP"]),
-        )
-
-        params[key] = HODParams(
-            logM_cut=row["logM_cut"],
-            logM1=row["logM1"],
-            sigma=row["sigma"],
-            kappa=row["kappa"],
-            alpha=row["alpha"],
-            alpha_c=row["alpha_c"],
-            alpha_s=row["alpha_s"],
-            Bcent=row["Bcent"],
-            Bsat=row["Bsat"],
-        )
-
-    return params
