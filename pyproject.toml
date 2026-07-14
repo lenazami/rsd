@@ -7,6 +7,10 @@ name = "rsd-analysis"
 version = "0.1.0"
 requires-python = ">=3.9"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+# expose src/rsd/ at root,
+# so scripts import as e.g. `rsd.graphs` rather than `scr.rsd.graphs`
+[tool.setuptools]
+packages = ["rsd"]
+
+[tool.setuptools.package-dir]
+rsd = "src/rsd"

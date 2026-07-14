@@ -1,0 +1,50 @@
+# config.yaml
+# -------------------
+# Edit params here!
+# for multiple of any of these, write as a list, e.g. z: [0.5, 1.0, 1.5] 
+# mocks.py will loop through all values listed!
+# bulky subsamples are written to $SCRATCH/subsamples
+
+sim_id:
+  name: base
+  z: 0.5
+  # cosmo: "000",   # to specify a cosmology
+  # phase: "000",   # to specify a phase
+
+mock:
+  tracer: lrg
+  hod_id: "000"     # hod in data/hods/hods.csv: 000-099 fid, 100-999 var (see manifest.csv)
+  hod_model: base   # label for mock/graph output dirs
+  seed_base: 100    # base rng seed; mock i uses seed_base + i
+  # custom_hod: config/hod/Yuan-config.yaml # point to a custom hod 
+
+# hod_variation:
+#   name: lrg_fiducial
+#   n_samples:   1024
+#   seed:        100
+#   ranges:
+#      sigma: [0.0, 1.0]      # example on how to structure the ranges for custom hod variations
+
+clustering:
+  corr_type: rppi # smu (multipoles) or rppi (projected)
+  regime: small   # all, small, large
+  n_seeds: 1
+  ells: [0, 2, 4]
+  pimax: 40.0 # TODO: what measurements/studies do we want to compare to? GAMA used 60 but we can play arond w it
+
+  ap:
+    fpar:  1.0
+    fperp: 1.0
+
+  # TODO: i want to just make these automatic. theres too much here. we can doc this under docs?
+  # binning:
+  #   n: 256
+  #   spacing: [lin, lin]
+  #   scales:
+  #     # small: {min: 0.1,  max: 150.0}
+  #     small: {min: 0.1, max: 50.0}
+  #     large: {min: 20.0, max: 500.0}
+  #   pi: {min: -40.0, max: 40.0, n: 80}
+  # # mu: {min: -1.0, max: 1.0, n: 200}   # smu second axis
+
+n_threads: 32

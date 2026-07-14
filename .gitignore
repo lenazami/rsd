@@ -1,13 +1,15 @@
 abacus
-results/
-config/
-plots/
-notebooks/
+/results/
+# /config/
+# /plots/
+/notebooks/
+/tutorials/
+/data/
+/sessions/
+/tests/
 
-data/*_params.csv
-data/subsamples/
-data/mocks/
 .agents/
+.claude/
 .codex/
 CLAUDE.md
 AGENTS.md
