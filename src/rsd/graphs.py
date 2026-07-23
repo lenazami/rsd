@@ -54,7 +54,7 @@ def find_neighbors(pos, is_central, boxsize, cyl_dim):
     return central_idx, node_idx
 
 def build_graph(
-    center,
+    # center,
     node_idx,
     pos,
     pos_real,
@@ -66,13 +66,16 @@ def build_graph(
     # ---- nodes ----
     # pos wrt center
     delta_rsd = min_img(
-        pos[node_idx] - pos[center],
+        pos - pos[0],
         boxsize,
     )
     delta_real = min_img(
-        pos_real[node_idx] - pos_real[center],
+        pos_real - pos_real[0],
         boxsize,
     )
+    
+    center_mask = np.zeros(n_nodes, dtype=bool)
+    center_mask[0] = True
     
     perp_xy = delta_rsd[:, :2]
     r_perp = np.linalg.norm(perp_xy, axis=1)
@@ -80,10 +83,12 @@ def build_graph(
     s_par = delta_rsd[:, 2]
     z_par = delta_real[:, 2]
     
+    delta_true = (z_par - s_par).astype(np.float32)
     node_features = np.column_stack([
             # perp_xy / scale,
             r_perp / scale,
             s_par / scale,
+            # center_node,
     ])
     
     # ---- edges ----
@@ -102,10 +107,11 @@ def build_graph(
     
     # relative angles
     cos_theta = np.zeros(len(src), dtype=np.float32)
-    valid_angle = denom > 1e-12
+    valid_angle = denom > 1e-12 # undefined for small enough transverse sep
     cos_theta[valid_angle] = (
         num[valid_angle] / denom[valid_angle]
     )
+    edge_to_center = (center_node[src] | center_node[dst])
     
     r_perp_sq = (
         r_perp[src] ** 2
@@ -115,32 +121,35 @@ def build_graph(
     r_perp_sq = np.maximum(r_perp_sq, 0.0)
 
     delta_perp = perp_xy[src] - perp_xy[dst]
-    delta_perp_sq = np.sum(delta_perp**2)
+    delta_perp_sq = np.sum(delta_perp**2, axis=1)
+    
     delta_z = z_par[src] - z_par[dst] # truth
     delta_dist = np.sqrt(delta_perp_sq + delta_z**2) # truth
 
     same_halo = halo_id[src] == halo_id[dst]
-
-    edge_features = cos_theta[:, None]
     
     return Data(
         # nodes
         x=torch.from_numpy(node_features),
+        # fixed
         s_par = torch.from_numpy(s_par / scale),
+        r_perp = torch.from_numpy(r_perp / scale),
+        # training targets
         z_par=torch.from_numpy(z_par / scale),
+        delta_true=torch.from_numpy(delta_true / scale),
         is_central=torch.from_numpy(is_central),
         halo_id=torch.from_numpy(halo_id),
         # edges
         edge_index=torch.from_numpy(edge_idx),
-        edge_attr=torch.from_numpy(edge_features),
+        edge_to_center=torch.from_numpy(edge_to_center),
+        edge_angle=torch.from_numpy(cos_theta[:, None]),
         edge_rperp_sq=torch.from_numpy(
             delta_perp_sq / scale**2
         ),
         edge_dist = torch.from_numpy(delta_dist / scale),
         same_halo = torch.from_numpy(same_halo),
         # to map back to catalog
-        center_node=torch.from_numpy(node_idx == center),
-        center_id=torch.tensor([center], dtype=torch.long),
+        center_id=torch.tensor([node_idx[0]], dtype=torch.long),
         n_id=torch.from_numpy(node_idx),
     )
 
@@ -161,15 +170,14 @@ def generate_graphs(cat, boxsize, cyl_dim):
     scale = float(cyl_dim[0])
     graphs = []
 
-    for center, nodes in zip(central_idx, neighbor_idx):
+    for nodes in neighbor_idx:
         if len(nodes) < 2:
             continue
         graphs.append(
             build_graph(
-                center=center,
                 node_idx=nodes,
-                pos=pos,
-                pos_real=pos_real,
+                pos=pos[nodes],
+                pos_real=pos_real[nodes],
                 is_central=is_central[nodes].astype(bool),
                 halo_id=halo_id[nodes],
                 boxsize=boxsize,
