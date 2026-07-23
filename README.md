@@ -38,6 +38,7 @@ there seems to be an issue w pycorr/Corrfunc (still determining the source), but
 
 ```bash
 USE_GPU=0 pip install git+https://github.com/cosmodesi/Corrfunc@desi
+python -m pip install "pycorr @ git+https://github.com/cosmodesi/pycorr"
 ```
 
 ## Pipeline
@@ -172,3 +173,24 @@ but for our use:
 216M	mocks/base
 2.4G	subsamples/AbacusSummit_highbase_c000_ph100/z0.500
 ```
+
+# packages
+
+```bash
+torch-geometric
+scikit-learn
+scienceplots
+tqdm
+corrfunc
+wandb
+seaborn
+scipy
+pandas
+numpy
+ipykernel
+```
+
+
+
+# defs
+to make life easy we use only `los=z` throughout the repo. 
