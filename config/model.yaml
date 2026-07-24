@@ -1,0 +1,24 @@
+# training defaults for scripts/training/train_gnn.py
+
+# graph file selection
+cyl_dim: [2.,10.]
+n_graphs: 20000     # absolute subsample of centrals for sweeps (0 = all; ignored when frac_graphs > 0)
+frac_graphs: 0.3    # fraction of the full graph set to use (0 = fall back to n_graphs)
+
+# model design
+hidden: 64
+layers: 3
+
+# loss
+sigma_floor: 3.0e-3
+gate_power: 1.0
+lambda_node: 0.01
+lambda_pair: 1.0
+gate_rho: 0.5
+
+# optimization
+epochs: 20
+batch_size: 128
+lr: 1.0e-3
+seed: 42
+threads: 8

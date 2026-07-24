@@ -10,7 +10,7 @@ from .utils import PATHS, COORDS, min_img
 # Functions
 # ------------------
 
-def find_neighbors(pos, is_central, boxsize, cyl_dim):
+def find_neighbors(pos, is_central, boxsize, cyl_dim, n_threads: int = 32):
     """
     Find central galaxies and their neighbors in a cylinder.
     Returns
@@ -28,7 +28,6 @@ def find_neighbors(pos, is_central, boxsize, cyl_dim):
         query_radius, 
         workers=n_threads,
     )
-    # TODO: need to get nthreads from config here
     
     # Need to mask out the cylinder only
     node_idx = []
@@ -139,7 +138,7 @@ def build_graph(
     )
 
 # TODO: instead of taking cat and boxsize, pass thru the mockid
-def generate_graphs(cat, boxsize, cyl_dim):
+def generate_graphs(cat, boxsize, cyl_dim, n_threads: int = 32):
     """Build all non-singlet graphs for one mock catalog."""
     # TODO: i want to input redshift!!
     pos = cat["GalaxyPos"] % boxsize
@@ -151,6 +150,7 @@ def generate_graphs(cat, boxsize, cyl_dim):
         is_central=is_central,
         boxsize=boxsize,
         cyl_dim=cyl_dim,
+        n_threads=n_threads,
     )
     scale = float(cyl_dim[0])
     graphs = []

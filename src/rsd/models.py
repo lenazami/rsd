@@ -390,7 +390,8 @@ class GraphModel(L.LightningModule):
             batch=batch,
             delta=delta,
         ))
-        self.log_dict({f"val/{key}": value for key, value in metrics.items()})
+        self.log_dict({f"val/{key}": value for key, value in metrics.items()},
+                    on_step=False,on_epoch=True, batch_size=batch.num_graphs)
         if batch_idx == 0:  # stash a batch for epoch-end figs
             self._plot_batch = batch
         return loss
@@ -403,7 +404,8 @@ class GraphModel(L.LightningModule):
             batch=batch,
             delta=delta,
         ))
-        self.log_dict({f"test/{key}": value for key, value in metrics.items()})
+        self.log_dict({f"test/{key}": value for key, value in metrics.items()}
+                    on_step=False,on_epoch=True, batch_size=batch.num_graphs)
         if batch_idx == 0:  # stash a batch for epoch-end figs
             self._plot_batch = batch
         return loss

@@ -8,16 +8,19 @@
 sim_id:
   name: base
   z: 0.5
-  # cosmo: "000",   # to specify a cosmology
-  # phase: "000",   # to specify a phase
+  cosmo: "000"
+  phase: "000"
 
 mock:
-  tracer: lrg
-  hod_id: "000"     # hod in data/hods/hods.csv: 000-099 fid, 100-999 var (see manifest.csv)
-  hod_model: base   # label for mock/graph output dirs
+  tracer: LRG
+  hod_id: "be7340b2"
+  hod_model: base
+  hod_family: fid
   seed_base: 100    # base rng seed; mock i uses seed_base + i
-  # custom_hod: config/hod/Yuan-config.yaml # point to a custom hod 
 
+data:
+  zs: [0.4, 1.4]
+  cosmos: ['000', '004', '001']
 # hod_variation:
 #   name: lrg_fiducial
 #   n_samples:   1024
@@ -48,3 +51,6 @@ clustering:
   # # mu: {min: -1.0, max: 1.0, n: 200}   # smu second axis
 
 n_threads: 32
+
+graph:
+  cyl_dim: [2.,10.]
