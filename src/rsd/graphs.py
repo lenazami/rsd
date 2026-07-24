@@ -1,7 +1,7 @@
 # src/rsd/graphs.py
 
 import numpy as np
-from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
 import torch
 from torch_geometric.data import Data, InMemoryDataset
 from .utils import PATHS, COORDS, min_img
@@ -22,7 +22,7 @@ def find_neighbors(pos, is_central, boxsize, cyl_dim, n_threads: int = 32):
     central_idx = np.flatnonzero(is_central)
     # Find neighbors using periodic boundary conditions
     positions = pos % boxsize
-    tree = cKDTree(positions, boxsize=boxsize)
+    tree = KDTree(positions, boxsize=boxsize)
     candidates = tree.query_ball_point(
         positions[central_idx], 
         query_radius, 
