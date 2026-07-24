@@ -6,7 +6,6 @@ import torch
 from torch_geometric.data import Data, InMemoryDataset
 from .utils import PATHS, COORDS, min_img
 
-
 # ------------------
 # Functions
 # ------------------
@@ -74,27 +73,25 @@ def build_graph(
         boxsize,
     )
     
+    n_nodes = len(node_idx)
     center_mask = np.zeros(n_nodes, dtype=bool)
     center_mask[0] = True
     
-    perp_xy = delta_rsd[:, :2]
-    r_perp = np.linalg.norm(perp_xy, axis=1)
+    perp_xy = delta_rsd[:, :2].astype(np.float32)
+    r_perp = np.linalg.norm(perp_xy, axis=1).astype(np.float32)
 
-    s_par = delta_rsd[:, 2]
-    z_par = delta_real[:, 2]
+    s_par = delta_rsd[:, 2].astype(np.float32)
+    z_par = delta_real[:, 2].astype(np.float32)
     
     delta_true = (z_par - s_par).astype(np.float32)
     node_features = np.column_stack([
-            # perp_xy / scale,
-            r_perp / scale,
-            s_par / scale,
-            # center_node,
-    ])
+        r_perp / scale,
+        s_par / scale,
+    ]).astype(np.float32)
     
     # ---- edges ----
     # Create edges between all pairs (no self edges)
-    n_nodes = len(node_idx)
-    adjacency = ~np.eye(n_nodes, dtype=bool)
+    adjacency = ~np.identity(n_nodes, dtype=bool)
     src, dst = np.nonzero(adjacency)
 
     edge_idx = np.vstack([
@@ -111,46 +108,34 @@ def build_graph(
     cos_theta[valid_angle] = (
         num[valid_angle] / denom[valid_angle]
     )
-    edge_to_center = (center_node[src] | center_node[dst])
     
-    r_perp_sq = (
-        r_perp[src] ** 2
-        + r_perp[dst] ** 2
-        - 2.0 * r_perp[src] * r_perp[dst] * cos_theta
-    )
-    r_perp_sq = np.maximum(r_perp_sq, 0.0)
-
     delta_perp = perp_xy[src] - perp_xy[dst]
-    delta_perp_sq = np.sum(delta_perp**2, axis=1)
-    
-    delta_z = z_par[src] - z_par[dst] # truth
-    delta_dist = np.sqrt(delta_perp_sq + delta_z**2) # truth
-
-    same_halo = halo_id[src] == halo_id[dst]
+    delta_perp_sq = np.sum(delta_perp**2, axis=1).astype(np.float32)
+    # truth vals
+    delta_z = (z_par[src] - z_par[dst]).astype(np.float32)
+    delta_dist = np.sqrt(delta_perp_sq + delta_z**2).astype(np.float32)
     
     return Data(
         # nodes
         x=torch.from_numpy(node_features),
-        # fixed
         s_par = torch.from_numpy(s_par / scale),
-        r_perp = torch.from_numpy(r_perp / scale),
-        # training targets
+        # training/supervision
         z_par=torch.from_numpy(z_par / scale),
         delta_true=torch.from_numpy(delta_true / scale),
-        is_central=torch.from_numpy(is_central),
-        halo_id=torch.from_numpy(halo_id),
+        center_node=torch.from_numpy(center_mask),
+        halo_id=torch.from_numpy(np.asarray(halo_id, dtype=np.int64)),
+        is_central=torch.from_numpy(np.asarray(is_central, dtype=bool)),
+        
         # edges
         edge_index=torch.from_numpy(edge_idx),
-        edge_to_center=torch.from_numpy(edge_to_center),
-        edge_angle=torch.from_numpy(cos_theta[:, None]),
-        edge_rperp_sq=torch.from_numpy(
-            delta_perp_sq / scale**2
-        ),
+        edge_angle=torch.from_numpy(cos_theta),
+        edge_rperp_sq=torch.from_numpy(delta_perp_sq / scale**2),
+        
+        edge_delta_z = torch.from_numpy(delta_z / scale),
         edge_dist = torch.from_numpy(delta_dist / scale),
-        same_halo = torch.from_numpy(same_halo),
         # to map back to catalog
         center_id=torch.tensor([node_idx[0]], dtype=torch.long),
-        n_id=torch.from_numpy(node_idx),
+        n_id=torch.from_numpy(np.asarray(node_idx, dtype=np.int64)),
     )
 
 # TODO: instead of taking cat and boxsize, pass thru the mockid
